@@ -1,0 +1,10 @@
+[package]
+name = "decimation-benchmark"
+version = "0.0.0"
+edition = "2018"
+resolver = "2"
+
+[dependencies]
+nanoview = { git="https://github.com/nanolabo/nanoview" }
+winit = { version = "0.25", features = ["web-sys"] }
+img_hash = "3.2"
