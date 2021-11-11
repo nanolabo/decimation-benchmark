@@ -5,6 +5,9 @@ edition = "2018"
 resolver = "2"
 
 [dependencies]
+nanomesh = { git="https://github.com/nanolabo/nanomesh-rust" }
 nanoview = { git="https://github.com/nanolabo/nanoview" }
 winit = { version = "0.25", features = ["web-sys"] }
 img_hash = "3.2"
+image = "0.23.14"
+pollster = "0.2.4"

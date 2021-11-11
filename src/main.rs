@@ -1,5 +1,7 @@
 use nanoview::{Camera, Renderer, Scene, PointLight};
 use nanoview::ultraviolet::{Rotor3, Vec3};
+use nanomesh::Vector3;
+use std::mem::size_of;
 
 use std::f32::consts::PI;
 
@@ -27,49 +29,49 @@ async fn run_async(event_loop: EventLoop<()>, window: winit::window::Window) {
     let surface = unsafe { instance.create_surface(&window) };
     let needed_extensions = nanoview::wgpu::Features::empty();
 
-    let adapter = 
-        instance.request_adapter(
-            &nanoview::wgpu::RequestAdapterOptions {
-                power_preference: nanoview::wgpu::PowerPreference::default(),
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            },
-        ).await.unwrap();
+    let adapter = instance.request_adapter(
+        &nanoview::wgpu::RequestAdapterOptions {
+            power_preference: nanoview::wgpu::PowerPreference::default(),
+            compatible_surface: Some(&surface),
+            force_fallback_adapter: false,
+        },
+    ).await.unwrap();
     let adapter_features = adapter.features();
 
-    let (device, queue) =
-        adapter.request_device(
-            &nanoview::wgpu::DeviceDescriptor {
-                label: None,
-                features: adapter_features & needed_extensions,
-                limits: nanoview::wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
-            },
-            None,
-        ).await.unwrap();
+    let (device, queue) = adapter.request_device(
+        &nanoview::wgpu::DeviceDescriptor {
+            label: None,
+            features: adapter_features & needed_extensions,
+            limits: nanoview::wgpu::Limits::default(),
+        },
+        None,
+    ).await.unwrap();
 
     let swapchain_format = surface.get_preferred_format(&adapter).unwrap();
     let mut surface_config = nanoview::wgpu::SurfaceConfiguration {
-        usage: nanoview::wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: nanoview::wgpu::TextureUsages::RENDER_ATTACHMENT, // | nanoview::wgpu::TextureUsages::COPY_DST,
         //format: wgpu::TextureFormat::Bgra8UnormSrgb,
         //format: wgpu::TextureFormat::Bgra8Unorm,
-        format: swapchain_format,
-        width: initial_screen_size.width,
-        height: initial_screen_size.height,
+        format: nanoview::wgpu::TextureFormat::Bgra8UnormSrgb,
+        width: 512,//initial_screen_size.width,
+        height: 512,//initial_screen_size.height,
         present_mode: nanoview::wgpu::PresentMode::Fifo,
     };
     surface.configure(&device, &surface_config);
 
     ////////////////////////////////////
 
-    let camera = Camera::new(surface_config.width as f32 / surface_config.height as f32);
+    let mut camera = Camera::new(surface_config.width as f32 / surface_config.height as f32);
+    // camera.set_projection(nanoview::ultraviolet::projection::rh_yup::orthographic_gl(
+    //     -1000.0, 1000.0, -1000.0, 1000.0, 0.001, 1000.0,
+    // ));
+
     let mut scene = Scene::new(camera);
     let mut renderer = Renderer::new(&surface_config, device, queue);
 
-    let mesh_id = {
-        scene.add_mesh(renderer.mesh_from_file(
-            "cases/helmet/helmet_original.glb", true,
-        ))
-    };
+    let mesh = renderer.mesh_from_file("cases/helmet/helmet_original.glb", true);
+    let bbox = mesh.bbox;
+    let mesh_id = scene.add_mesh(mesh);
 
     // Unnecessary but perhaps educational?
     scene.mesh(mesh_id).position = Vec3::zero();
@@ -109,6 +111,8 @@ async fn run_async(event_loop: EventLoop<()>, window: winit::window::Window) {
     let mut prev_mouse_x: f64 = 0.0;
     let mut prev_mouse_y: f64 = 0.0;
 
+    camera_distance = 1.3 * bbox.diagonal() as f32;
+
     let mut timer = timer::Timer::new();
 
     event_loop.run(move |event, _, control_flow| {
@@ -120,8 +124,8 @@ async fn run_async(event_loop: EventLoop<()>, window: winit::window::Window) {
         match event {
             event::Event::MainEventsCleared => window.request_redraw(),
             event::Event::WindowEvent { event: WindowEvent::Resized(size), .. } => {
-                surface_config.width = size.width;
-                surface_config.height = size.height;
+                //surface_config.width = size.width;
+                //surface_config.height = size.height;
                 surface.configure(&renderer.device, &surface_config);
 
                 scene.camera.resize(surface_config.width as f32 / surface_config.height as f32);
@@ -139,24 +143,6 @@ async fn run_async(event_loop: EventLoop<()>, window: winit::window::Window) {
                 }
                 | WindowEvent::CloseRequested => {
                     *control_flow = ControlFlow::Exit;
-                }
-
-                WindowEvent::CursorMoved { position, .. } => {
-                    let delta_x = position.x - prev_mouse_x;
-                    let delta_y = position.y - prev_mouse_y;
-                    prev_mouse_x = position.x;
-                    prev_mouse_y = position.y;
-
-                    player_rot_x -= (delta_y as f32) * 0.5;
-                    player_rot_y += (delta_x as f32) * 0.5;
-
-                    player_rot =
-                        Rotor3::from_rotation_xz(f32::to_radians(player_rot_y)) *
-                        Rotor3::from_rotation_yz(f32::to_radians(player_rot_x));
-                }
-
-                WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(_, y), .. } => {
-                    camera_distance -= y * 0.5;
                 }
 
                 _ => { }
@@ -193,13 +179,84 @@ async fn run_async(event_loop: EventLoop<()>, window: winit::window::Window) {
 
                 // Render scene
                 let frame = surface.get_current_texture().expect("output frame");
-                let mut encoder =
-                    renderer.device.create_command_encoder(&nanoview::wgpu::CommandEncoderDescriptor {
-                        label: None,
-                    });
-                renderer.render(&frame.texture.create_view(&nanoview::wgpu::TextureViewDescriptor::default()), &mut encoder, &scene);
+                let mut encoder = renderer.device.create_command_encoder(&nanoview::wgpu::CommandEncoderDescriptor {
+                    label: None,
+                });
+
+                let texture_desc = nanoview::wgpu::TextureDescriptor {
+                    size: nanoview::wgpu::Extent3d {
+                        width: surface_config.width,
+                        height: surface_config.height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: nanoview::wgpu::TextureDimension::D2,
+                    format: nanoview::wgpu::TextureFormat::Bgra8UnormSrgb,
+                    usage: nanoview::wgpu::TextureUsages::COPY_SRC | nanoview::wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    label: None,
+                };
+
+                let buffer_dimensions = BufferDimensions::new(surface_config.width as usize, surface_config.height as usize);
+
+                let output_buffer_desc = nanoview::wgpu::BufferDescriptor {
+                    size: (buffer_dimensions.padded_bytes_per_row * buffer_dimensions.height) as u64,
+                    usage: nanoview::wgpu::BufferUsages::COPY_DST | nanoview::wgpu::BufferUsages::MAP_READ,
+                    label: None,
+                    mapped_at_creation: false,
+                };
+                let output_buffer = renderer.device.create_buffer(&output_buffer_desc);
+
+                // Render to framebuffer
+                let fb_texture = renderer.device.create_texture(&texture_desc);
+                let fb_view = fb_texture.create_view(&nanoview::wgpu::TextureViewDescriptor::default());
+                renderer.render(&fb_view, &mut encoder, &scene);
+
+                // Render to surface
+                let texture_view = frame.texture.create_view(&nanoview::wgpu::TextureViewDescriptor::default());
+                renderer.render(&texture_view, &mut encoder, &scene);
+
+                encoder.copy_texture_to_buffer(
+                    nanoview::wgpu::ImageCopyTexture {
+                        aspect: nanoview::wgpu::TextureAspect::All,
+                            texture: &fb_texture,
+                        mip_level: 0,
+                        origin: nanoview::wgpu::Origin3d::ZERO,
+                    },
+                    nanoview::wgpu::ImageCopyBuffer {
+                        buffer: &output_buffer,
+                        layout: nanoview::wgpu::ImageDataLayout {
+                            offset: 0,
+                            bytes_per_row: std::num::NonZeroU32::new(buffer_dimensions.padded_bytes_per_row as u32),
+                            rows_per_image: std::num::NonZeroU32::new(surface_config.height),
+                        },
+                    },
+                    texture_desc.size,
+                );
+
                 renderer.queue.submit(Some(encoder.finish()));
                 frame.present();
+
+                // We need to scope the mapping variables so that we can
+                // unmap the buffer
+                {
+                    let buffer_slice = output_buffer.slice(..);
+
+                    // NOTE: We have to create the mapping THEN device.poll() before await
+                    // the future. Otherwise the application will freeze.
+                    let mapping = buffer_slice.map_async(nanoview::wgpu::MapMode::Read);
+                    renderer.device.poll(nanoview::wgpu::Maintain::Wait);
+                    pollster::block_on(mapping).unwrap();
+
+                    let data = buffer_slice.get_mapped_range();
+
+                    image::save_buffer("/Users/oginiaux/Projects/nanolabo/decimation-benchmark/image.jpg", 
+                        data.as_ref(),
+                        surface_config.width,
+                        surface_config.height,
+                        image::ColorType::Bgra8).unwrap();
+                }
+                output_buffer.unmap();
             }
             _ => (),
         }
@@ -232,6 +289,29 @@ mod timer {
         pub fn clear(&mut self) {
             let now = Instant::now();
             self.last = now;
+        }
+    }
+}
+
+struct BufferDimensions {
+    width: usize,
+    height: usize,
+    unpadded_bytes_per_row: usize,
+    padded_bytes_per_row: usize,
+}
+
+impl BufferDimensions {
+    fn new(width: usize, height: usize) -> Self {
+        let bytes_per_pixel = size_of::<u32>();
+        let unpadded_bytes_per_row = width * bytes_per_pixel;
+        let align = nanoview::wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+        let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
+        let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
+        Self {
+            width,
+            height,
+            unpadded_bytes_per_row,
+            padded_bytes_per_row,
         }
     }
 }
