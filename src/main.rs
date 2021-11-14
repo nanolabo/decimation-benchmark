@@ -1,13 +1,14 @@
+#![deny(elided_lifetimes_in_paths)]
+
 use nanoview::{Camera, Renderer, Scene, PointLight};
 use nanoview::ultraviolet::{Rotor3, Vec3};
-use nanomesh::Vector3;
 use std::mem::size_of;
-
-use std::f32::consts::PI;
+use image::{ImageBuffer, Bgra};
+use img_hash::{HasherConfig, ImageHash};
 
 use winit::{
     event_loop::{ControlFlow, EventLoop},
-    event::{self, WindowEvent, MouseScrollDelta},
+    event::{self, WindowEvent},
 };
 
 fn main() {
@@ -78,22 +79,22 @@ async fn run_async(event_loop: EventLoop<()>, window: winit::window::Window) {
     scene.mesh(mesh_id).scale = Vec3::broadcast(1.0);
 
     // We'll position these lights down in the render loop
-    let light0 = scene.add_point_light(PointLight {
-        pos: [0.0; 3],
-        color: [1.0, 0.3, 0.3],
-        intensity: 800.0,
+    scene.add_point_light(PointLight {
+        pos: [1.0, 1.0, 1.0],
+        color: [1.0, 1.0, 1.0],
+        intensity: 1000.0,
     });
 
-    let light1 = scene.add_point_light(PointLight {
-        pos: [0.0; 3],
-        color: [0.3, 1.0, 0.3],
-        intensity: 800.0,
+    scene.add_point_light(PointLight {
+        pos: [1.0, 1.0, 1.0],
+        color: [1.0, 1.0, 1.0],
+        intensity: 750.0,
     });
 
-    let light2 = scene.add_point_light(PointLight {
-        pos: [0.0; 3],
-        color: [0.3, 0.3, 1.0],
-        intensity: 800.0,
+    scene.add_point_light(PointLight {
+        pos: [1.0, 1.0, 1.0],
+        color: [1.0, 1.0, 1.0],
+        intensity: 500.0,
     });
 
     let winit::dpi::PhysicalSize { width: win_w, height: win_h } = window.inner_size();
@@ -102,18 +103,16 @@ async fn run_async(event_loop: EventLoop<()>, window: winit::window::Window) {
     let _ignore_error = window
         .set_cursor_position(winit::dpi::LogicalPosition::new(win_center_x, win_center_y))
         .map_err(|_| eprintln!("unable to set cursor position"));
-    window.set_maximized(true);
+    //window.set_maximized(true);
 
-    let mut player_rot_x: f32 = 0.0;
-    let mut player_rot_y: f32 = 0.0;
     let mut player_rot = Rotor3::identity();
     let mut camera_distance: f32 = 5.0;
-    let mut prev_mouse_x: f64 = 0.0;
-    let mut prev_mouse_y: f64 = 0.0;
 
     camera_distance = 1.3 * bbox.diagonal() as f32;
 
     let mut timer = timer::Timer::new();
+
+    let mut prevHash: Option<ImageHash> = None;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = if cfg!(feature = "metal-auto-capture") {
@@ -150,23 +149,6 @@ async fn run_async(event_loop: EventLoop<()>, window: winit::window::Window) {
             event::Event::RedrawRequested(_) => {
                 let elapsed = timer.get_elapsed_micros();
                 let elapsed_seconds = elapsed as f32 / 1_000_000.0;
-
-                // Orbit them lights
-                scene.point_light(light0).pos = [
-                    10.0 * f32::cos(elapsed_seconds + 0.0 / 3.0 * 2.0 * PI),
-                    10.0,
-                    10.0 * f32::sin(elapsed_seconds + 0.0 / 3.0 * 2.0 * PI),
-                ];
-                scene.point_light(light1).pos = [
-                    10.0 * f32::cos(elapsed_seconds + 1.0 / 3.0 * 2.0 * PI),
-                    10.0,
-                    10.0 * f32::sin(elapsed_seconds + 1.0 / 3.0 * 2.0 * PI),
-                ];
-                scene.point_light(light2).pos = [
-                    10.0 * f32::cos(elapsed_seconds + 2.0 / 3.0 * 2.0 * PI),
-                    10.0,
-                    10.0 * f32::sin(elapsed_seconds + 2.0 / 3.0 * 2.0 * PI),
-                ];
 
                 // Update camera
                 let mut cam_offset = Vec3::new(0.0, 0.0, -camera_distance);
@@ -240,27 +222,52 @@ async fn run_async(event_loop: EventLoop<()>, window: winit::window::Window) {
                 // We need to scope the mapping variables so that we can
                 // unmap the buffer
                 {
-                    let buffer_slice = output_buffer.slice(..);
-
-                    // NOTE: We have to create the mapping THEN device.poll() before await
-                    // the future. Otherwise the application will freeze.
-                    let mapping = buffer_slice.map_async(nanoview::wgpu::MapMode::Read);
-                    renderer.device.poll(nanoview::wgpu::Maintain::Wait);
-                    pollster::block_on(mapping).unwrap();
-
-                    let data = buffer_slice.get_mapped_range();
-
-                    image::save_buffer("/Users/oginiaux/Projects/nanolabo/decimation-benchmark/image.jpg", 
-                        data.as_ref(),
-                        surface_config.width,
-                        surface_config.height,
-                        image::ColorType::Bgra8).unwrap();
+                    let hash = save_to_disk(&renderer, &output_buffer, &buffer_dimensions);
+                    
+                    match &prevHash {
+                        Some(value) => {
+                            println!("Hamming Distance: {}", hash.dist(&value));
+                        },
+                        None => ()
+                    }
+                    prevHash = Some(hash);
                 }
+
                 output_buffer.unmap();
             }
             _ => (),
         }
     });
+}
+
+fn save_to_disk<'a>(renderer: &'a Renderer, buffer: &'a nanoview::wgpu::Buffer, buffer_dimensions: &BufferDimensions) -> ImageHash {
+
+    let buffer_slice: nanoview::wgpu::BufferSlice<'a> = buffer.slice(..);
+
+    let mapping = buffer_slice.map_async(nanoview::wgpu::MapMode::Read);
+    renderer.device.poll(nanoview::wgpu::Maintain::Wait);
+    pollster::block_on(mapping).unwrap();
+
+    let data: nanoview::wgpu::BufferView<'a> = buffer_slice.get_mapped_range();
+
+    use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+
+    let mut c = Cursor::new(Vec::new());
+
+    for chunk in data.chunks(buffer_dimensions.padded_bytes_per_row) {
+        c.write_all(&chunk[..buffer_dimensions.unpadded_bytes_per_row]).unwrap();
+    }
+    c.seek(SeekFrom::Start(0)).unwrap();
+
+    let mut out = Vec::new();
+    c.read_to_end(&mut out).unwrap();
+
+    let hasher = HasherConfig::new().to_hasher();
+
+    let image_buffer: ImageBuffer<Bgra<u8>, Vec<u8>> = ImageBuffer::<Bgra<u8>, Vec<u8>>::from_raw(buffer_dimensions.width as u32, buffer_dimensions.height as u32, out).unwrap();
+    image_buffer.save("image.jpg").unwrap();
+
+    return hasher.hash_image(&image_buffer);
 }
 
 mod timer {
