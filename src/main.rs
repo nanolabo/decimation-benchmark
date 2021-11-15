@@ -1,39 +1,56 @@
-#![deny(elided_lifetimes_in_paths)]
-
-use nanoview::{Camera, Renderer, Scene, PointLight};
-use nanoview::ultraviolet::{Rotor3, Vec3};
+use nanomesh::Vector3;
+use nanoview::{Camera, Renderer, Scene, PointLight, wgpu};
+use nanoview::ultraviolet::{Vec3};
 use std::mem::size_of;
 use image::{ImageBuffer, Bgra};
-use img_hash::{HasherConfig, ImageHash};
+use img_hash::{HasherConfig};
 
-use winit::{
-    event_loop::{ControlFlow, EventLoop},
-    event::{self, WindowEvent},
+static surface_config: wgpu::SurfaceConfiguration = nanoview::wgpu::SurfaceConfiguration {
+    usage: nanoview::wgpu::TextureUsages::RENDER_ATTACHMENT,
+    format: nanoview::wgpu::TextureFormat::Bgra8UnormSrgb,
+    width: 1024,
+    height: 1024,
+    present_mode: nanoview::wgpu::PresentMode::Fifo,
 };
 
-fn main() {
+static T: f64 = 1.61803398874989;
+static icosphere_positions: [Vector3; 12] =
+[
+    Vector3 { x: -1., y: T, z: 0. },
+    Vector3 { x: 1., y: T, z: 0. },
+    Vector3 { x: -1., y: -T, z: 0. },
+    Vector3 { x: 1., y: -T, z: 0. },
+    Vector3 { x: 0., y: -1., z: T },
+    Vector3 { x: 0., y: 1., z: T },
+    Vector3 { x: 0., y: -1., z: -T },
+    Vector3 { x: 0., y: 1., z: -T },
+    Vector3 { x: T, y: 0., z: -1. },
+    Vector3 { x: T, y: 0., z: 1. },
+    Vector3 { x: -T, y: 0., z: -1. },
+    Vector3 { x: -T, y: 0., z: 1. }
+];
 
-    let event_loop = EventLoop::new();
-
-    let title = "decimation-benchmark";
-
-    let window = winit::window::Window::new(&event_loop).unwrap();
-    window.set_title(title);
-
-    nanoview::futures::executor::block_on(run_async(event_loop, window));
+fn main()
+{
+    nanoview::futures::executor::block_on(run_async("cases/helmet/helmet_original.glb"));
 }
 
-async fn run_async(event_loop: EventLoop<()>, window: winit::window::Window) {
+fn hamming_distance(a: &Vec<u8>, b: &Vec<u8>) -> u32 {
+    a.as_slice().iter().zip(b.as_slice()).map(|(l, r)| (l ^ r).count_ones()).sum()
+}
+
+async fn run_async(file_path: &str) -> Vec<u8>
+{
+    let mut total_hash = Vec::new();
+
     let instance = nanoview::wgpu::Instance::new(nanoview::wgpu::Backends::all());
 
-    let initial_screen_size = window.inner_size();
-    let surface = unsafe { instance.create_surface(&window) };
     let needed_extensions = nanoview::wgpu::Features::empty();
 
     let adapter = instance.request_adapter(
         &nanoview::wgpu::RequestAdapterOptions {
             power_preference: nanoview::wgpu::PowerPreference::default(),
-            compatible_surface: Some(&surface),
+            compatible_surface: None,
             force_fallback_adapter: false,
         },
     ).await.unwrap();
@@ -48,20 +65,6 @@ async fn run_async(event_loop: EventLoop<()>, window: winit::window::Window) {
         None,
     ).await.unwrap();
 
-    let swapchain_format = surface.get_preferred_format(&adapter).unwrap();
-    let mut surface_config = nanoview::wgpu::SurfaceConfiguration {
-        usage: nanoview::wgpu::TextureUsages::RENDER_ATTACHMENT, // | nanoview::wgpu::TextureUsages::COPY_DST,
-        //format: wgpu::TextureFormat::Bgra8UnormSrgb,
-        //format: wgpu::TextureFormat::Bgra8Unorm,
-        format: nanoview::wgpu::TextureFormat::Bgra8UnormSrgb,
-        width: 512,//initial_screen_size.width,
-        height: 512,//initial_screen_size.height,
-        present_mode: nanoview::wgpu::PresentMode::Fifo,
-    };
-    surface.configure(&device, &surface_config);
-
-    ////////////////////////////////////
-
     let mut camera = Camera::new(surface_config.width as f32 / surface_config.height as f32);
     // camera.set_projection(nanoview::ultraviolet::projection::rh_yup::orthographic_gl(
     //     -1000.0, 1000.0, -1000.0, 1000.0, 0.001, 1000.0,
@@ -70,7 +73,7 @@ async fn run_async(event_loop: EventLoop<()>, window: winit::window::Window) {
     let mut scene = Scene::new(camera);
     let mut renderer = Renderer::new(&surface_config, device, queue);
 
-    let mesh = renderer.mesh_from_file("cases/helmet/helmet_original.glb", true);
+    let mesh = renderer.mesh_from_file(file_path, true);
     let bbox = mesh.bbox;
     let mesh_id = scene.add_mesh(mesh);
 
@@ -80,175 +83,117 @@ async fn run_async(event_loop: EventLoop<()>, window: winit::window::Window) {
 
     // We'll position these lights down in the render loop
     scene.add_point_light(PointLight {
-        pos: [1.0, 1.0, 1.0],
+        pos: [0.0, 10.0, 10.0],
         color: [1.0, 1.0, 1.0],
         intensity: 1000.0,
     });
 
     scene.add_point_light(PointLight {
-        pos: [1.0, 1.0, 1.0],
+        pos: [10.0, 10.0, 10.0],
         color: [1.0, 1.0, 1.0],
         intensity: 750.0,
     });
 
     scene.add_point_light(PointLight {
-        pos: [1.0, 1.0, 1.0],
+        pos: [-5.0, 10.0, -5.0],
         color: [1.0, 1.0, 1.0],
         intensity: 500.0,
     });
 
-    let winit::dpi::PhysicalSize { width: win_w, height: win_h } = window.inner_size();
-    let win_center_x = win_w / 2;
-    let win_center_y = win_h / 2;
-    let _ignore_error = window
-        .set_cursor_position(winit::dpi::LogicalPosition::new(win_center_x, win_center_y))
-        .map_err(|_| eprintln!("unable to set cursor position"));
-    //window.set_maximized(true);
+    let camera_distance: f64 = 1.3 * bbox.diagonal();
 
-    let mut player_rot = Rotor3::identity();
-    let mut camera_distance: f32 = 5.0;
+    for i in 0..12 {
 
-    camera_distance = 1.3 * bbox.diagonal() as f32;
+        // Update camera
+        let camera_position = &icosphere_positions[i].normalized() * camera_distance;
 
-    let mut timer = timer::Timer::new();
+        let cam_offset = Vec3::new(camera_position.x as f32, camera_position.y as f32, camera_position.z as f32);
+        scene.camera.look_at(
+            cam_offset,
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        );
 
-    let mut prevHash: Option<ImageHash> = None;
+        // Render scene
+        let mut encoder = renderer.device.create_command_encoder(&nanoview::wgpu::CommandEncoderDescriptor {
+            label: None,
+        });
 
-    event_loop.run(move |event, _, control_flow| {
-        *control_flow = if cfg!(feature = "metal-auto-capture") {
-            ControlFlow::Exit
-        } else {
-            ControlFlow::Poll
+        let texture_desc = nanoview::wgpu::TextureDescriptor {
+            size: nanoview::wgpu::Extent3d {
+                width: surface_config.width,
+                height: surface_config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: nanoview::wgpu::TextureDimension::D2,
+            format: nanoview::wgpu::TextureFormat::Bgra8UnormSrgb,
+            usage: nanoview::wgpu::TextureUsages::COPY_SRC | nanoview::wgpu::TextureUsages::RENDER_ATTACHMENT,
+            label: None,
         };
-        match event {
-            event::Event::MainEventsCleared => window.request_redraw(),
-            event::Event::WindowEvent { event: WindowEvent::Resized(size), .. } => {
-                //surface_config.width = size.width;
-                //surface_config.height = size.height;
-                surface.configure(&renderer.device, &surface_config);
 
-                scene.camera.resize(surface_config.width as f32 / surface_config.height as f32);
-                renderer.mesh_pass.resize(&surface_config, &mut renderer.device);
-            }
-            event::Event::WindowEvent { event, .. } => match event {
-                WindowEvent::KeyboardInput {
-                    input:
-                        event::KeyboardInput {
-                            virtual_keycode: Some(event::VirtualKeyCode::Escape),
-                            state: event::ElementState::Pressed,
-                            ..
-                        },
-                    ..
-                }
-                | WindowEvent::CloseRequested => {
-                    *control_flow = ControlFlow::Exit;
-                }
+        let buffer_dimensions = BufferDimensions::new(surface_config.width as usize, surface_config.height as usize);
 
-                _ => { }
-            }
-            event::Event::RedrawRequested(_) => {
-                let elapsed = timer.get_elapsed_micros();
-                let elapsed_seconds = elapsed as f32 / 1_000_000.0;
+        let output_buffer_desc = nanoview::wgpu::BufferDescriptor {
+            size: (buffer_dimensions.padded_bytes_per_row * buffer_dimensions.height) as u64,
+            usage: nanoview::wgpu::BufferUsages::COPY_DST | nanoview::wgpu::BufferUsages::MAP_READ,
+            label: None,
+            mapped_at_creation: false,
+        };
+        let output_buffer = renderer.device.create_buffer(&output_buffer_desc);
 
-                // Update camera
-                let mut cam_offset = Vec3::new(0.0, 0.0, -camera_distance);
-                player_rot.rotate_vec(&mut cam_offset);
-                scene.camera.look_at(
-                    cam_offset,
-                    Vec3::new(0.0, 0.0, 0.0),
-                    Vec3::new(0.0, 1.0, 0.0),
-                );
+        // Render to framebuffer
+        let fb_texture = renderer.device.create_texture(&texture_desc);
+        let fb_view = fb_texture.create_view(&nanoview::wgpu::TextureViewDescriptor::default());
+        renderer.render(&fb_view, &mut encoder, &scene);
 
-                // Render scene
-                let frame = surface.get_current_texture().expect("output frame");
-                let mut encoder = renderer.device.create_command_encoder(&nanoview::wgpu::CommandEncoderDescriptor {
-                    label: None,
-                });
+        encoder.copy_texture_to_buffer(
+            nanoview::wgpu::ImageCopyTexture {
+                aspect: nanoview::wgpu::TextureAspect::All,
+                    texture: &fb_texture,
+                mip_level: 0,
+                origin: nanoview::wgpu::Origin3d::ZERO,
+            },
+            nanoview::wgpu::ImageCopyBuffer {
+                buffer: &output_buffer,
+                layout: nanoview::wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: std::num::NonZeroU32::new(buffer_dimensions.padded_bytes_per_row as u32),
+                    rows_per_image: std::num::NonZeroU32::new(surface_config.height),
+                },
+            },
+            texture_desc.size,
+        );
 
-                let texture_desc = nanoview::wgpu::TextureDescriptor {
-                    size: nanoview::wgpu::Extent3d {
-                        width: surface_config.width,
-                        height: surface_config.height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: nanoview::wgpu::TextureDimension::D2,
-                    format: nanoview::wgpu::TextureFormat::Bgra8UnormSrgb,
-                    usage: nanoview::wgpu::TextureUsages::COPY_SRC | nanoview::wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    label: None,
-                };
+        renderer.queue.submit(Some(encoder.finish()));
 
-                let buffer_dimensions = BufferDimensions::new(surface_config.width as usize, surface_config.height as usize);
+        {
+            let bytes = get_buffer_bytes(&renderer, &output_buffer, &buffer_dimensions);
+            let image_buffer = get_image_buffer(bytes);
+            
+            image_buffer.save(format!("image{}.jpg", i)).unwrap();
 
-                let output_buffer_desc = nanoview::wgpu::BufferDescriptor {
-                    size: (buffer_dimensions.padded_bytes_per_row * buffer_dimensions.height) as u64,
-                    usage: nanoview::wgpu::BufferUsages::COPY_DST | nanoview::wgpu::BufferUsages::MAP_READ,
-                    label: None,
-                    mapped_at_creation: false,
-                };
-                let output_buffer = renderer.device.create_buffer(&output_buffer_desc);
-
-                // Render to framebuffer
-                let fb_texture = renderer.device.create_texture(&texture_desc);
-                let fb_view = fb_texture.create_view(&nanoview::wgpu::TextureViewDescriptor::default());
-                renderer.render(&fb_view, &mut encoder, &scene);
-
-                // Render to surface
-                let texture_view = frame.texture.create_view(&nanoview::wgpu::TextureViewDescriptor::default());
-                renderer.render(&texture_view, &mut encoder, &scene);
-
-                encoder.copy_texture_to_buffer(
-                    nanoview::wgpu::ImageCopyTexture {
-                        aspect: nanoview::wgpu::TextureAspect::All,
-                            texture: &fb_texture,
-                        mip_level: 0,
-                        origin: nanoview::wgpu::Origin3d::ZERO,
-                    },
-                    nanoview::wgpu::ImageCopyBuffer {
-                        buffer: &output_buffer,
-                        layout: nanoview::wgpu::ImageDataLayout {
-                            offset: 0,
-                            bytes_per_row: std::num::NonZeroU32::new(buffer_dimensions.padded_bytes_per_row as u32),
-                            rows_per_image: std::num::NonZeroU32::new(surface_config.height),
-                        },
-                    },
-                    texture_desc.size,
-                );
-
-                renderer.queue.submit(Some(encoder.finish()));
-                frame.present();
-
-                // We need to scope the mapping variables so that we can
-                // unmap the buffer
-                {
-                    let hash = save_to_disk(&renderer, &output_buffer, &buffer_dimensions);
-                    
-                    match &prevHash {
-                        Some(value) => {
-                            println!("Hamming Distance: {}", hash.dist(&value));
-                        },
-                        None => ()
-                    }
-                    prevHash = Some(hash);
-                }
-
-                output_buffer.unmap();
-            }
-            _ => (),
+            let hasher = HasherConfig::new().to_hasher();
+            let hash = hasher.hash_image(&image_buffer);
+            total_hash.extend_from_slice(&hash.as_bytes());
         }
-    });
+
+        output_buffer.unmap();
+    }
+
+    return total_hash;
 }
 
-fn save_to_disk<'a>(renderer: &'a Renderer, buffer: &'a nanoview::wgpu::Buffer, buffer_dimensions: &BufferDimensions) -> ImageHash {
-
-    let buffer_slice: nanoview::wgpu::BufferSlice<'a> = buffer.slice(..);
+fn get_buffer_bytes(renderer: &Renderer, buffer: &nanoview::wgpu::Buffer, buffer_dimensions: &BufferDimensions) -> Vec<u8>
+{
+    let buffer_slice: nanoview::wgpu::BufferSlice = buffer.slice(..);
 
     let mapping = buffer_slice.map_async(nanoview::wgpu::MapMode::Read);
     renderer.device.poll(nanoview::wgpu::Maintain::Wait);
     pollster::block_on(mapping).unwrap();
 
-    let data: nanoview::wgpu::BufferView<'a> = buffer_slice.get_mapped_range();
+    let data: nanoview::wgpu::BufferView = buffer_slice.get_mapped_range();
 
     use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 
@@ -262,42 +207,13 @@ fn save_to_disk<'a>(renderer: &'a Renderer, buffer: &'a nanoview::wgpu::Buffer, 
     let mut out = Vec::new();
     c.read_to_end(&mut out).unwrap();
 
-    let hasher = HasherConfig::new().to_hasher();
-
-    let image_buffer: ImageBuffer<Bgra<u8>, Vec<u8>> = ImageBuffer::<Bgra<u8>, Vec<u8>>::from_raw(buffer_dimensions.width as u32, buffer_dimensions.height as u32, out).unwrap();
-    image_buffer.save("image.jpg").unwrap();
-
-    return hasher.hash_image(&image_buffer);
+    return out;
 }
 
-mod timer {
-    use std::time::Instant;
-
-    pub struct Timer {
-        last: Instant,
-    }
-
-    impl Timer {
-        pub fn new() -> Timer {
-            let now = Instant::now();
-            Timer {
-                last: now,
-            }
-        }
-
-        pub fn get_elapsed_micros(&mut self) -> u64 {
-            let now = Instant::now();
-            let duration = now.duration_since(self.last);
-            let interval = duration.as_micros() as u64;
-
-            interval
-        }
-
-        pub fn clear(&mut self) {
-            let now = Instant::now();
-            self.last = now;
-        }
-    }
+fn get_image_buffer(bytes: Vec<u8>) -> ImageBuffer<Bgra<u8>, Vec<u8>>
+{
+    let image_buffer: ImageBuffer<Bgra<u8>, Vec<u8>> = ImageBuffer::<Bgra<u8>, Vec<u8>>::from_raw(surface_config.width as u32, surface_config.height as u32, bytes).unwrap();
+    return image_buffer;
 }
 
 struct BufferDimensions {
