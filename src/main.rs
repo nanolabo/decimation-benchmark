@@ -5,16 +5,16 @@ use std::mem::size_of;
 use image::{ImageBuffer, Bgra};
 use img_hash::{HasherConfig};
 
-static surface_config: wgpu::SurfaceConfiguration = nanoview::wgpu::SurfaceConfiguration {
-    usage: nanoview::wgpu::TextureUsages::RENDER_ATTACHMENT,
-    format: nanoview::wgpu::TextureFormat::Bgra8UnormSrgb,
+static SURFACE_CONFIG: wgpu::SurfaceConfiguration = wgpu::SurfaceConfiguration {
+    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+    format: wgpu::TextureFormat::Bgra8UnormSrgb,
     width: 1024,
     height: 1024,
-    present_mode: nanoview::wgpu::PresentMode::Fifo,
+    present_mode: wgpu::PresentMode::Fifo,
 };
 
 static T: f64 = 1.61803398874989;
-static icosphere_positions: [Vector3; 12] =
+static ICOSPHERE_POSITIONS: [Vector3; 12] =
 [
     Vector3 { x: -1., y: T, z: 0. },
     Vector3 { x: 1., y: T, z: 0. },
@@ -35,21 +35,17 @@ fn main()
     nanoview::futures::executor::block_on(run_async("cases/helmet/helmet_original.glb"));
 }
 
-fn hamming_distance(a: &Vec<u8>, b: &Vec<u8>) -> u32 {
-    a.as_slice().iter().zip(b.as_slice()).map(|(l, r)| (l ^ r).count_ones()).sum()
-}
-
 async fn run_async(file_path: &str) -> Vec<u8>
 {
     let mut total_hash = Vec::new();
 
-    let instance = nanoview::wgpu::Instance::new(nanoview::wgpu::Backends::all());
+    let instance = wgpu::Instance::new(wgpu::Backends::all());
 
-    let needed_extensions = nanoview::wgpu::Features::empty();
+    let needed_extensions = wgpu::Features::empty();
 
     let adapter = instance.request_adapter(
-        &nanoview::wgpu::RequestAdapterOptions {
-            power_preference: nanoview::wgpu::PowerPreference::default(),
+        &wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::default(),
             compatible_surface: None,
             force_fallback_adapter: false,
         },
@@ -57,21 +53,18 @@ async fn run_async(file_path: &str) -> Vec<u8>
     let adapter_features = adapter.features();
 
     let (device, queue) = adapter.request_device(
-        &nanoview::wgpu::DeviceDescriptor {
+        &wgpu::DeviceDescriptor {
             label: None,
             features: adapter_features & needed_extensions,
-            limits: nanoview::wgpu::Limits::default(),
+            limits: wgpu::Limits::default(),
         },
         None,
     ).await.unwrap();
 
-    let mut camera = Camera::new(surface_config.width as f32 / surface_config.height as f32);
-    // camera.set_projection(nanoview::ultraviolet::projection::rh_yup::orthographic_gl(
-    //     -1000.0, 1000.0, -1000.0, 1000.0, 0.001, 1000.0,
-    // ));
+    let camera = Camera::new(SURFACE_CONFIG.width as f32 / SURFACE_CONFIG.height as f32);
 
     let mut scene = Scene::new(camera);
-    let mut renderer = Renderer::new(&surface_config, device, queue);
+    let mut renderer = Renderer::new(&SURFACE_CONFIG, device, queue);
 
     let mesh = renderer.mesh_from_file(file_path, true);
     let bbox = mesh.bbox;
@@ -102,10 +95,10 @@ async fn run_async(file_path: &str) -> Vec<u8>
 
     let camera_distance: f64 = 1.3 * bbox.diagonal();
 
-    for i in 0..12 {
+    for i in 0..ICOSPHERE_POSITIONS.len() {
 
         // Update camera
-        let camera_position = &icosphere_positions[i].normalized() * camera_distance;
+        let camera_position = &ICOSPHERE_POSITIONS[i].normalized() * camera_distance;
 
         let cam_offset = Vec3::new(camera_position.x as f32, camera_position.y as f32, camera_position.z as f32);
         scene.camera.look_at(
@@ -115,29 +108,29 @@ async fn run_async(file_path: &str) -> Vec<u8>
         );
 
         // Render scene
-        let mut encoder = renderer.device.create_command_encoder(&nanoview::wgpu::CommandEncoderDescriptor {
+        let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: None,
         });
 
-        let texture_desc = nanoview::wgpu::TextureDescriptor {
-            size: nanoview::wgpu::Extent3d {
-                width: surface_config.width,
-                height: surface_config.height,
+        let texture_desc = wgpu::TextureDescriptor {
+            size: wgpu::Extent3d {
+                width: SURFACE_CONFIG.width,
+                height: SURFACE_CONFIG.height,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
             sample_count: 1,
-            dimension: nanoview::wgpu::TextureDimension::D2,
-            format: nanoview::wgpu::TextureFormat::Bgra8UnormSrgb,
-            usage: nanoview::wgpu::TextureUsages::COPY_SRC | nanoview::wgpu::TextureUsages::RENDER_ATTACHMENT,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::RENDER_ATTACHMENT,
             label: None,
         };
 
-        let buffer_dimensions = BufferDimensions::new(surface_config.width as usize, surface_config.height as usize);
+        let buffer_dimensions = BufferDimensions::new(SURFACE_CONFIG.width as usize, SURFACE_CONFIG.height as usize);
 
-        let output_buffer_desc = nanoview::wgpu::BufferDescriptor {
+        let output_buffer_desc = wgpu::BufferDescriptor {
             size: (buffer_dimensions.padded_bytes_per_row * buffer_dimensions.height) as u64,
-            usage: nanoview::wgpu::BufferUsages::COPY_DST | nanoview::wgpu::BufferUsages::MAP_READ,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             label: None,
             mapped_at_creation: false,
         };
@@ -145,22 +138,22 @@ async fn run_async(file_path: &str) -> Vec<u8>
 
         // Render to framebuffer
         let fb_texture = renderer.device.create_texture(&texture_desc);
-        let fb_view = fb_texture.create_view(&nanoview::wgpu::TextureViewDescriptor::default());
+        let fb_view = fb_texture.create_view(&wgpu::TextureViewDescriptor::default());
         renderer.render(&fb_view, &mut encoder, &scene);
 
         encoder.copy_texture_to_buffer(
-            nanoview::wgpu::ImageCopyTexture {
-                aspect: nanoview::wgpu::TextureAspect::All,
+            wgpu::ImageCopyTexture {
+                aspect: wgpu::TextureAspect::All,
                     texture: &fb_texture,
                 mip_level: 0,
-                origin: nanoview::wgpu::Origin3d::ZERO,
+                origin: wgpu::Origin3d::ZERO,
             },
-            nanoview::wgpu::ImageCopyBuffer {
+            wgpu::ImageCopyBuffer {
                 buffer: &output_buffer,
-                layout: nanoview::wgpu::ImageDataLayout {
+                layout: wgpu::ImageDataLayout {
                     offset: 0,
                     bytes_per_row: std::num::NonZeroU32::new(buffer_dimensions.padded_bytes_per_row as u32),
-                    rows_per_image: std::num::NonZeroU32::new(surface_config.height),
+                    rows_per_image: std::num::NonZeroU32::new(SURFACE_CONFIG.height),
                 },
             },
             texture_desc.size,
@@ -170,7 +163,7 @@ async fn run_async(file_path: &str) -> Vec<u8>
 
         {
             let bytes = get_buffer_bytes(&renderer, &output_buffer, &buffer_dimensions);
-            let image_buffer = get_image_buffer(bytes);
+            let image_buffer = get_image_buffer(bytes).await.unwrap();
             
             image_buffer.save(format!("image{}.jpg", i)).unwrap();
 
@@ -185,15 +178,15 @@ async fn run_async(file_path: &str) -> Vec<u8>
     return total_hash;
 }
 
-fn get_buffer_bytes(renderer: &Renderer, buffer: &nanoview::wgpu::Buffer, buffer_dimensions: &BufferDimensions) -> Vec<u8>
+async fn get_buffer_bytes(renderer: &Renderer, buffer: &wgpu::Buffer, buffer_dimensions: &BufferDimensions) -> Result<Vec<u8>>
 {
-    let buffer_slice: nanoview::wgpu::BufferSlice = buffer.slice(..);
+    let buffer_slice: wgpu::BufferSlice = buffer.slice(..);
 
-    let mapping = buffer_slice.map_async(nanoview::wgpu::MapMode::Read);
-    renderer.device.poll(nanoview::wgpu::Maintain::Wait);
-    pollster::block_on(mapping).unwrap();
+    let mapping = buffer_slice.map_async(wgpu::MapMode::Read);
+    renderer.device.poll(wgpu::Maintain::Wait);
+    mapping.await.unwrap();
 
-    let data: nanoview::wgpu::BufferView = buffer_slice.get_mapped_range();
+    let data: wgpu::BufferView = buffer_slice.get_mapped_range();
 
     use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 
@@ -212,8 +205,12 @@ fn get_buffer_bytes(renderer: &Renderer, buffer: &nanoview::wgpu::Buffer, buffer
 
 fn get_image_buffer(bytes: Vec<u8>) -> ImageBuffer<Bgra<u8>, Vec<u8>>
 {
-    let image_buffer: ImageBuffer<Bgra<u8>, Vec<u8>> = ImageBuffer::<Bgra<u8>, Vec<u8>>::from_raw(surface_config.width as u32, surface_config.height as u32, bytes).unwrap();
+    let image_buffer: ImageBuffer<Bgra<u8>, Vec<u8>> = ImageBuffer::<Bgra<u8>, Vec<u8>>::from_raw(SURFACE_CONFIG.width as u32, SURFACE_CONFIG.height as u32, bytes).unwrap();
     return image_buffer;
+}
+
+fn hamming_distance(a: &Vec<u8>, b: &Vec<u8>) -> u32 {
+    a.as_slice().iter().zip(b.as_slice()).map(|(l, r)| (l ^ r).count_ones()).sum()
 }
 
 struct BufferDimensions {
@@ -227,7 +224,7 @@ impl BufferDimensions {
     fn new(width: usize, height: usize) -> Self {
         let bytes_per_pixel = size_of::<u32>();
         let unpadded_bytes_per_row = width * bytes_per_pixel;
-        let align = nanoview::wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
         let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
         let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
         Self {
