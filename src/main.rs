@@ -4,6 +4,7 @@ use nanoview::ultraviolet::{Vec3};
 use std::mem::size_of;
 use image::{ImageBuffer, Bgra};
 use img_hash::{HasherConfig};
+use std::time::{Instant};
 
 static SURFACE_CONFIG: wgpu::SurfaceConfiguration = wgpu::SurfaceConfiguration {
     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -32,10 +33,23 @@ static ICOSPHERE_POSITIONS: [Vector3; 12] =
 
 fn main()
 {
-    nanoview::futures::executor::block_on(run_async("cases/helmet/helmet_original.glb"));
+    let now = Instant::now();
+
+    nanoview::futures::executor::block_on(run_all_async());
+
+    println!("done in: {} ms", now.elapsed().as_millis());    
 }
 
-async fn run_async(file_path: &str) -> Vec<u8>
+async fn run_all_async()
+{
+    let hash1 = run_async("cases/helmet/helmet_original.glb").await.unwrap();
+    let hash2 = run_async("cases/helmet/helmet_90p.glb").await.unwrap();
+
+    let dist = hamming_distance(&hash1, &hash2);
+    println!("distance: {}", dist);
+}
+
+async fn run_async(file_path: &str) -> Result<Vec<u8>, ()>
 {
     let mut total_hash = Vec::new();
 
@@ -162,10 +176,10 @@ async fn run_async(file_path: &str) -> Vec<u8>
         renderer.queue.submit(Some(encoder.finish()));
 
         {
-            let bytes = get_buffer_bytes(&renderer, &output_buffer, &buffer_dimensions);
-            let image_buffer = get_image_buffer(bytes).await.unwrap();
+            let bytes = get_buffer_bytes(&renderer, &output_buffer, &buffer_dimensions).await.unwrap();
+            let image_buffer = get_image_buffer(bytes);
             
-            image_buffer.save(format!("image{}.jpg", i)).unwrap();
+            //image_buffer.save(format!("image{}.jpg", i)).unwrap();
 
             let hasher = HasherConfig::new().to_hasher();
             let hash = hasher.hash_image(&image_buffer);
@@ -175,10 +189,10 @@ async fn run_async(file_path: &str) -> Vec<u8>
         output_buffer.unmap();
     }
 
-    return total_hash;
+    return Ok(total_hash);
 }
 
-async fn get_buffer_bytes(renderer: &Renderer, buffer: &wgpu::Buffer, buffer_dimensions: &BufferDimensions) -> Result<Vec<u8>>
+async fn get_buffer_bytes(renderer: &Renderer, buffer: &wgpu::Buffer, buffer_dimensions: &BufferDimensions) -> Result<Vec<u8>, ()>
 {
     let buffer_slice: wgpu::BufferSlice = buffer.slice(..);
 
@@ -200,7 +214,7 @@ async fn get_buffer_bytes(renderer: &Renderer, buffer: &wgpu::Buffer, buffer_dim
     let mut out = Vec::new();
     c.read_to_end(&mut out).unwrap();
 
-    return out;
+    return Ok(out);
 }
 
 fn get_image_buffer(bytes: Vec<u8>) -> ImageBuffer<Bgra<u8>, Vec<u8>>
